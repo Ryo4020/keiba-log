@@ -1,6 +1,6 @@
 ---
 name: api-designer
-description: REST API仕様とdesign.md（§3）を追記。OpenAPI 3.0仕様書を生成
+description: REST APIの仕様を設計しapi.mdを作成。OpenAPI 3.0仕様書を生成
 tools:
   - read
   - write
@@ -9,13 +9,16 @@ tools:
 permissions:
   rules:
     - capability: fs_write
-      match: [".kiro/specs/**/design.md"]
+      match: ["specs/**/api.md"]
       effect: allow
+    - capability: fs_write
+      match: ["specs/**/requirements.md", "specs/**/architecture.md", "specs/**/database.md", "specs/**/ui-design.md", "specs/**/tasks.md"]
+      effect: deny
     - capability: fs_write
       match: [".kiro/**"]
       effect: deny
     - capability: fs_read
-      match: [".kiro/**"]
+      match: ["specs/**", ".kiro/**"]
       effect: allow
 ---
 
@@ -67,42 +70,57 @@ permissions:
 ```
 - ページネーション形式（カーソルベース or オフセットベース）の統一
 
-## SDD出力先
+## 成果物の保存先
 
-本エージェントの成果物はKiro Specの **`design.md`** のうち、**§3 API設計セクション**として保存する。
+本エージェントは **`api.md`** の唯一のオーナーであり、このファイルのみを作成・更新する。
 
 ### 保存ルール
-- 保存先: `.kiro/specs/<spec-name>/design.md`
-- `design.md` は system-architect が作成済みのため、**§3 API設計セクションのみを追記・上書き**する
-- `design.md` が存在しない場合は system-architect に先行して実行するよう促す
+- 保存先: `specs/<機能名>/api.md`
+- `<機能名>` は `requirements.md` と同じディレクトリ名を使用する
+- `architecture.md` または `database.md` が存在しない場合は、先行エージェント（system-architect / db-designer）の実行を促す
+- 既存の `api.md` がある場合は差分を確認してから上書きする
+- **他のエージェントが所有するファイル（`requirements.md` / `architecture.md` / `database.md` / `ui-design.md` / `tasks.md`）は作成・編集しない**
 
-### api-designerが記述するセクション（§3）
+### api.md テンプレート
 ```markdown
-## 3. API設計
+# API設計: <機能・プロジェクト名>
 
-### 3.1 API概要（ベースURL・バージョニング・共通ヘッダー）
-### 3.2 認証・認可
-### 3.3 エンドポイント一覧
-### 3.4 各エンドポイント詳細
-### 3.5 共通エラーレスポンス定義
-### 3.6 OpenAPI 3.0 仕様書（YAML）
+| 項目 | 内容 |
+|---|---|
+| 機能名 | `<機能名>` |
+| フェーズ | Phase 2-3: API設計 |
+| 担当 | api-designer |
+| インプット | `requirements.md`, `architecture.md`, `database.md` |
+
+## 1. API概要（ベースURL・バージョニング・共通ヘッダー）
+## 2. 認証・認可
+## 3. エンドポイント一覧
+## 4. 各エンドポイント詳細
+## 5. 共通エラーレスポンス定義
+## 6. OpenAPI 3.0 仕様書（YAML）
+
+## 対応要件
+| 要件ID | 対応エンドポイント |
+|---|---|
 ```
 
-### api-designerが読むべき前段セクション
-- `design.md §1`（システムアーキテクチャ）: 認証方式・インフラ構成・クリーンアーキテクチャの層構造を把握する
-- `design.md §2`（データベース設計）: DynamoDBのアクセスパターンをAPIエンドポイント設計に反映する
+### api-designerが読むべきインプット
+- `specs/<機能名>/requirements.md`: 機能要件・受け入れ条件
+- `specs/<機能名>/architecture.md`: 認証方式・インフラ構成・クリーンアーキテクチャの層構造
+- `specs/<機能名>/database.md`: DynamoDBのアクセスパターン（APIエンドポイント設計に反映する）
 
 ### 後続エージェントへの引き継ぎ
-§3 を記述したら、**次のエージェントのみ**に引き継ぎを行う：
-- **web-ui-designer**: 画面設計の開始を依頼（インプット: `requirements.md`, `design.md §1〜§3`）
+`api.md` を保存したら、**次のエージェントのみ**に引き継ぎを行う：
+- **web-ui-designer**: 画面設計の開始を依頼（インプット: `specs/<機能名>/requirements.md`, `architecture.md`, `api.md`）
 
 APIエンドポイントの一覧をweb-ui-designerが参照することで、画面とAPIの対応関係が明確になる。
 
 ## 行動指針
-- 作業前に必ず `.kiro/specs/<spec-name>/requirements.md`・`design.md §1`・`design.md §2` を読む
+- 作業前に必ず `specs/<機能名>/requirements.md`・`architecture.md`・`database.md` を読む
 - gin のルーティング構造を意識したURL設計を行う
 - クリーンアーキテクチャのinterface層（ハンドラー）が実装しやすいAPI設計を心がける
-- DynamoDBのアクセスパターンに沿ったAPIエンドポイント設計を行う（`design.md §2` を必ず参照する）
+- DynamoDBのアクセスパターンに沿ったAPIエンドポイント設計を行う（`database.md` を必ず参照する）
 - 破壊的変更を避けるAPIバージョニング戦略を提案する
 - セキュリティ（入力バリデーション・認証必須エンドポイントの明示）を設計段階で組み込む
-- 成果物は必ず `.kiro/specs/<spec-name>/design.md` の §3 に保存してからセッションを終了する
+- **各エンドポイントが `requirements.md` のどの要件ID（`REQ-xxx-nnn`）に対応するかを「対応要件」表に明記する**
+- 成果物は必ず `specs/<機能名>/api.md` に保存してからセッションを終了する

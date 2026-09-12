@@ -11,13 +11,16 @@ tools:
 permissions:
   rules:
     - capability: fs_write
-      match: ["**/cdk/**/*.ts", "**/lib/**/*.ts", "**/bin/**/*.ts", "cdk.json", "package.json", "tsconfig.json", ".kiro/specs/**/tasks.md"]
+      match: ["**/cdk/**/*.ts", "**/lib/**/*.ts", "**/bin/**/*.ts", "cdk.json", "package.json", "tsconfig.json", "specs/**/tasks.md"]
       effect: allow
     - capability: fs_write
-      match: [".kiro/specs/**/requirements.md", ".kiro/specs/**/design.md"]
+      match: ["specs/**/requirements.md", "specs/**/architecture.md", "specs/**/database.md", "specs/**/api.md", "specs/**/ui-design.md"]
+      effect: deny
+    - capability: fs_write
+      match: [".kiro/**"]
       effect: deny
     - capability: fs_read
-      match: [".kiro/**"]
+      match: ["specs/**", ".kiro/**"]
       effect: allow
     - capability: shell
       match: ["npm *", "npx *", "cdk *", "aws *"]
@@ -118,7 +121,7 @@ export class ApiStack extends cdk.Stack {
 ## タスク管理（SDD）
 
 ### 実装前
-1. `.kiro/specs/<spec-name>/tasks.md` を読み、担当タスクを確認する
+1. `specs/<機能名>/tasks.md` を読み、担当タスクを確認する
 2. 対象タスクのステータスを `[ ]`（未着手）→ `[/]`（実装中）に更新する
 3. タスクの「参照仕様」に記載されたドキュメントを読んでから実装を開始する
 
@@ -129,18 +132,18 @@ export class ApiStack extends cdk.Stack {
 
 ### tasks.md の更新例
 ```markdown
-### タスク 1.1: DynamoDBテーブル定義（CDK）
-- **ステータス**: `[x]` <!-- 完了 -->
+### `[x]` タスク 1.1: DynamoDBテーブル定義（CDK）
+- **担当**: aws-developer
 - **受け入れ条件**:
   - [x] UserテーブルがCDKコードで定義されている
   - [x] PK・SK・GSIが設計書と一致している
   - [x] オンデマンドキャパシティが設定されている
-- **備考**: GSI名を設計書から `UsersByEmailIndex` に変更。設計書の更新を要確認
+- **備考**: GSI名を設計書から `UsersByEmailIndex` に変更。`database.md` の更新をdb-designerに要確認
 ```
 
 ## 行動指針
-- 実装前に必ず `.kiro/specs/<spec-name>/tasks.md` でタスクを確認し、ステータスを「実装中」に更新する
-- 実装前に必ずアーキテクチャ設計書を参照する
+- 実装前に必ず `specs/<機能名>/tasks.md` でタスクを確認し、ステータスを「実装中」に更新する
+- 実装前に必ず `specs/<機能名>/architecture.md`・`database.md` を参照する
 - 既存CDKコードがある場合は必ず読んでからスタイルを合わせる
 - IAMロール・ポリシーは最小権限の原則を徹底する
 - 機密情報（APIキー・パスワード）はSSM Parameter Store / Secrets Managerで管理する

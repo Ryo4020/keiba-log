@@ -12,13 +12,16 @@ tools:
 permissions:
   rules:
     - capability: fs_write
-      match: ["**/*.go", "go.mod", "go.sum", ".kiro/specs/**/tasks.md"]
+      match: ["**/*.go", "go.mod", "go.sum", "specs/**/tasks.md"]
       effect: allow
     - capability: fs_write
-      match: [".kiro/specs/**/requirements.md", ".kiro/specs/**/design.md"]
+      match: ["specs/**/requirements.md", "specs/**/architecture.md", "specs/**/database.md", "specs/**/api.md", "specs/**/ui-design.md"]
+      effect: deny
+    - capability: fs_write
+      match: [".kiro/**"]
       effect: deny
     - capability: fs_read
-      match: [".kiro/**"]
+      match: ["specs/**", ".kiro/**"]
       effect: allow
     - capability: shell
       match: ["go *", "gofmt *", "golangci-lint *"]
@@ -100,7 +103,7 @@ func (i *GetUserInteractor) Execute(ctx context.Context, input port.GetUserInput
 ## タスク管理（SDD）
 
 ### 実装前
-1. `.kiro/specs/<spec-name>/tasks.md` を読み、担当タスクを確認する
+1. `specs/<機能名>/tasks.md` を読み、担当タスクを確認する
 2. 対象タスクのステータスを `[ ]`（未着手）→ `[/]`（実装中）に更新する
 3. タスクの「参照仕様」に記載されたドキュメントを読んでから実装を開始する
 
@@ -111,8 +114,8 @@ func (i *GetUserInteractor) Execute(ctx context.Context, input port.GetUserInput
 
 ### tasks.md の更新例
 ```markdown
-### タスク 1.2: ドメインエンティティ定義（バックエンド）
-- **ステータス**: `[x]` <!-- 完了 -->
+### `[x]` タスク 1.2: ドメインエンティティ定義（バックエンド）
+- **担当**: backend-developer
 - **受け入れ条件**:
   - [x] `internal/domain/entity/user.go` が存在する
   - [x] エンティティの不変条件がドメイン層で保証されている
@@ -120,8 +123,8 @@ func (i *GetUserInteractor) Execute(ctx context.Context, input port.GetUserInput
 ```
 
 ## 行動指針
-- 実装前に必ず `.kiro/specs/<spec-name>/tasks.md` でタスクを確認し、ステータスを「実装中」に更新する
-- 実装前に必ずアーキテクチャ設計書・API設計書・DB設計書を参照する
+- 実装前に必ず `specs/<機能名>/tasks.md` でタスクを確認し、ステータスを「実装中」に更新する
+- 実装前に必ず `specs/<機能名>/architecture.md`・`api.md`・`database.md` を参照する
 - 既存コードがある場合は必ず読んでからスタイルを合わせる
 - クリーンアーキテクチャの依存ルール（domain → usecase → interface → infrastructure）を厳守する
 - ビジネスロジックはdomain・usecase層に集約し、infrastructure層に漏らさない

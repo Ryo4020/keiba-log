@@ -11,13 +11,16 @@ tools:
 permissions:
   rules:
     - capability: fs_write
-      match: ["**/*_test.go", ".kiro/specs/**/tasks.md"]
+      match: ["**/*_test.go", "specs/**/tasks.md"]
       effect: allow
     - capability: fs_write
-      match: [".kiro/specs/**/requirements.md", ".kiro/specs/**/design.md"]
+      match: ["specs/**/requirements.md", "specs/**/architecture.md", "specs/**/database.md", "specs/**/api.md", "specs/**/ui-design.md"]
+      effect: deny
+    - capability: fs_write
+      match: [".kiro/**"]
       effect: deny
     - capability: fs_read
-      match: [".kiro/**"]
+      match: ["specs/**", ".kiro/**"]
       effect: allow
     - capability: shell
       match: ["go test *", "go mod *"]
@@ -130,7 +133,7 @@ func TestGetUserInteractor_Execute(t *testing.T) {
 ## タスク管理（SDD）
 
 ### 実装前
-1. `.kiro/specs/<spec-name>/tasks.md` を読み、担当タスクを確認する
+1. `specs/<機能名>/tasks.md` を読み、担当タスクを確認する
 2. 対象タスクのステータスを `[ ]`（未着手）→ `[/]`（実装中）に更新する
 3. テスト対象の実装コードを読んでからテストを作成する
 
@@ -141,8 +144,8 @@ func TestGetUserInteractor_Execute(t *testing.T) {
 
 ### tasks.md の更新例
 ```markdown
-### タスク 4.1: ユーザー登録ユースケースのユニットテスト
-- **ステータス**: `[x]` <!-- 完了 -->
+### `[x]` タスク 4.1: ユーザー登録ユースケースのユニットテスト
+- **担当**: unit-test-generator
 - **受け入れ条件**:
   - [x] 正常系のテストケースが存在する
   - [x] バリデーションエラーのテストケースが存在する
@@ -151,7 +154,7 @@ func TestGetUserInteractor_Execute(t *testing.T) {
 ```
 
 ## 行動指針
-- 実装前に必ず `.kiro/specs/<spec-name>/tasks.md` でタスクを確認し、ステータスを「実装中」に更新する
+- 実装前に必ず `specs/<機能名>/tasks.md` でタスクを確認し、ステータスを「実装中」に更新する
 - 実装コードを必ず読んでからテストを生成する
 - テスト対象のインターフェースをモックとして実装する
 - 正常系だけでなく、異常系・境界値ケースを必ずカバーする

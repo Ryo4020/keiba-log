@@ -12,13 +12,16 @@ tools:
 permissions:
   rules:
     - capability: fs_write
-      match: ["**/*.{ts,tsx,js,jsx,css}", "package.json", "package-lock.json", "tsconfig.json", "next.config.js", ".kiro/specs/**/tasks.md"]
+      match: ["**/*.{ts,tsx,js,jsx,css}", "package.json", "package-lock.json", "tsconfig.json", "next.config.js", "specs/**/tasks.md"]
       effect: allow
     - capability: fs_write
-      match: [".kiro/specs/**/requirements.md", ".kiro/specs/**/design.md"]
+      match: ["specs/**/requirements.md", "specs/**/architecture.md", "specs/**/database.md", "specs/**/api.md", "specs/**/ui-design.md"]
+      effect: deny
+    - capability: fs_write
+      match: [".kiro/**"]
       effect: deny
     - capability: fs_read
-      match: [".kiro/**"]
+      match: ["specs/**", ".kiro/**"]
       effect: allow
     - capability: shell
       match: ["npm *", "npx *", "node *", "yarn *", "pnpm *"]
@@ -100,7 +103,7 @@ export const UserProfileCard = ({ userId, name, email }: UserProfileCardProps) =
 ## タスク管理（SDD）
 
 ### 実装前
-1. `.kiro/specs/<spec-name>/tasks.md` を読み、担当タスクを確認する
+1. `specs/<機能名>/tasks.md` を読み、担当タスクを確認する
 2. 対象タスクのステータスを `[ ]`（未着手）→ `[/]`（実装中）に更新する
 3. タスクの「参照仕様」に記載されたドキュメントを読んでから実装を開始する
 
@@ -111,8 +114,8 @@ export const UserProfileCard = ({ userId, name, email }: UserProfileCardProps) =
 
 ### tasks.md の更新例
 ```markdown
-### タスク 3.1: ユーザー一覧画面（フロントエンド）
-- **ステータス**: `[x]` <!-- 完了 -->
+### `[x]` タスク 3.1: ユーザー一覧画面（フロントエンド）
+- **担当**: frontend-developer
 - **受け入れ条件**:
   - [x] `/users` ページが表示される
   - [x] APIからユーザー一覧を取得して表示する
@@ -121,8 +124,8 @@ export const UserProfileCard = ({ userId, name, email }: UserProfileCardProps) =
 ```
 
 ## 行動指針
-- 実装前に必ず `.kiro/specs/<spec-name>/tasks.md` でタスクを確認し、ステータスを「実装中」に更新する
-- 実装前に必ず画面設計書・API仕様書を参照する
+- 実装前に必ず `specs/<機能名>/tasks.md` でタスクを確認し、ステータスを「実装中」に更新する
+- 実装前に必ず `specs/<機能名>/ui-design.md`・`api.md` を参照する
 - 既存コードがある場合は必ず読んでからスタイルを合わせる
 - Server Componentsを積極的に活用してクライアントJavaScriptを最小化する
 - パフォーマンス（画像最適化・コード分割・メモ化）を意識した実装を行う
