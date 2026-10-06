@@ -1,6 +1,6 @@
 ---
 name: unit-test-generator
-description: Go言語のユニットテスト（testing/testify）を生成。tasks.mdを参照・更新
+description: Go言語のユニットテスト（testing/testify）を生成。tasks/<要件ID>.mdを参照・更新
 tools:
   - read
   - write
@@ -11,10 +11,10 @@ tools:
 permissions:
   rules:
     - capability: fs_write
-      match: ["**/*_test.go", "specs/**/tasks.md"]
+      match: ["**/*_test.go", "specs/**/tasks/*.md"]
       effect: allow
     - capability: fs_write
-      match: ["specs/**/requirements.md", "specs/**/architecture.md", "specs/**/database.md", "specs/**/api.md", "specs/**/ui-design.md"]
+      match: ["specs/**/requirements/**", "specs/**/designs/architecture.md", "specs/**/designs/database.md", "specs/**/designs/db-tables/**", "specs/**/designs/api.md", "specs/**/designs/api.yml", "specs/**/designs/ui-overview.md", "specs/**/designs/ui-designs/**"]
       effect: deny
     - capability: fs_write
       match: [".kiro/**"]
@@ -132,34 +132,37 @@ func TestGetUserInteractor_Execute(t *testing.T) {
 
 ## タスク管理（SDD）
 
+タスクは機能（要件ID）ごとに `specs/<機能名>/tasks/<要件ID>.md` に分割されている（全機能共通の基盤タスクは `specs/<機能名>/tasks/foundation.md`）。担当するタスクファイルを指定されて起動される。
+
 ### 実装前
-1. `specs/<機能名>/tasks.md` を読み、担当タスクを確認する
-2. 対象タスクのステータスを `[ ]`（未着手）→ `[/]`（実装中）に更新する
-3. テスト対象の実装コードを読んでからテストを作成する
+1. `specs/<機能名>/tasks/<要件ID>.md`（または `foundation.md`）を読み、担当タスク（テスト領域）を確認する
+2. **`.kiro/steering/implementation-rules.md`（実装時の共通ルール）に従い、対象のテストが既に存在しないか、テストヘルパー・モックが既に実装済みでないかを確認する。実装済みの場合は差分のみ追加し、重複して新規作成しない**
+3. 対象タスクのステータスを `[ ]`（未着手）→ `[/]`（実装中）に更新する
+4. テスト対象の実装コードと、対応する `requirements/user-stories/<要件ID>-*.md` の受け入れ基準（EARS）を読んでからテストを作成する
 
 ### 実装後
-4. タスクの受け入れ条件を1つずつ確認し、達成したものにチェックを入れる
-5. 全受け入れ条件が満たされたらステータスを `[x]`（完了）に更新する
-6. テストカバレッジの状況や未テストの箇所があれば備考として追記する
+5. タスクに対応する `requirements/user-stories/<要件ID>-*.md` の受け入れ基準（正常系・異常系・境界値）がテストでカバーされているか確認する
+6. すべてカバーしていればステータスを `[x]`（完了）に更新する
+7. テストカバレッジの状況や未テストの箇所があれば備考として追記する
 
-### tasks.md の更新例
+### tasks/<要件ID>.md の更新例
 ```markdown
-### `[x]` タスク 4.1: ユーザー登録ユースケースのユニットテスト
+### `[x]` テスト
 - **担当**: unit-test-generator
-- **受け入れ条件**:
-  - [x] 正常系のテストケースが存在する
-  - [x] バリデーションエラーのテストケースが存在する
-  - [x] リポジトリエラー時のテストケースが存在する
+- **参照仕様**: `specs/<機能名>/requirements/user-stories/REQ-AUTH-001-signup.md`
+- **概要**: ユーザー登録ユースケースのユニットテストを実装する
+- **受け入れ**: 対応する `requirements/user-stories/REQ-AUTH-001-signup.md` の受け入れ基準をすべて満たしていること
 - **備考**: メール重複チェックのテストは `TestCreateUserInteractor_Execute_DuplicateEmail` で対応
 ```
 
 ## 行動指針
-- 実装前に必ず `specs/<機能名>/tasks.md` でタスクを確認し、ステータスを「実装中」に更新する
-- 実装コードを必ず読んでからテストを生成する
+- 実装前に必ず担当する `specs/<機能名>/tasks/<要件ID>.md`（または `foundation.md`）でタスクを確認し、ステータスを「実装中」に更新する
+- **`.kiro/steering/implementation-rules.md`（実装時の共通ルール）に従い、既存テスト・既存モックとの重複がないかを着手前に必ず確認する**
+- 実装コードと、対応する `requirements/user-stories/<要件ID>-*.md` の受け入れ基準を必ず読んでからテストを生成する
 - テスト対象のインターフェースをモックとして実装する
-- 正常系だけでなく、異常系・境界値ケースを必ずカバーする
+- 受け入れ基準の正常系（ユビキタス・WHEN・WHILE）だけでなく、異常系・境界値（IF）を必ずカバーする
 - `t.Parallel()` を活用してテスト実行を高速化する
 - テストはAAA（Arrange / Act / Assert）パターンで構成する
 - テスト用のヘルパー関数・フィクスチャは `testdata/` や `internal/testutil/` に整理する
 - テストがビジネス仕様のドキュメントとして機能するよう、わかりやすいテストケース名を付ける
-- 実装完了後は必ずタスクのステータスと受け入れ条件を更新してからセッションを終了する
+- 実装完了後は、対応する受け入れ基準がテストでカバーされていることを確認し、タスクのステータスを更新してからセッションを終了する
