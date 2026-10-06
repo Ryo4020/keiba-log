@@ -1,0 +1,997 @@
+openapi: 3.0.3
+
+info:
+  title: keiba-log API
+  version: "1.0"
+  description: |
+    馬券記録の登録・編集・削除・取得、生涯収支サマリーの取得、アカウント削除を提供する API。
+
+    サインアップ・ログイン・ログアウト・メールアドレス確認・パスワード再設定は Cognito User Pool
+    に対してブラウザから直接行うため、本 API のエンドポイントには含まれない。
+    値の制限（金額の範囲・買い目の件数上限・競馬場や券種のマスタデータ・結果の確定状態による条件分岐など）は
+    requirements/business-rules.md の定義に従う。本仕様では値の制限を重複して定義しない。
+
+servers:
+  - url: https://{apiId}.execute-api.{region}.amazonaws.com
+    description: API Gateway（HTTP API）のデフォルトエンドポイント
+    variables:
+      apiId:
+        default: example
+        description: API Gateway の API ID
+      region:
+        default: ap-northeast-1
+        description: AWS リージョン
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: summary
+    description: 生涯収支サマリー
+  - name: records
+    description: 馬券記録
+  - name: account
+    description: アカウント
+
+paths:
+  /summary:
+    get:
+      tags: [summary]
+      operationId: getSummary
+      summary: 生涯収支サマリーの取得
+      description: |
+        ログイン中のユーザーの全馬券記録を対象とした生涯の購入額合計・払戻額合計・収支額・回収率・記録件数を返す。
+        収支額と回収率は保存された値ではなく、取得時に購入額合計・払戻額合計から算出する。
+        回収率は小数第2位を四捨五入した小数第1位までの値で返す。利益・損失・均衡の判定には収支額（`balance`）を使い、
+        丸めた回収率では判定しない。
+        期間の指定・絞り込みのパラメータは持たない。
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Summary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /records:
+    get:
+      tags: [records]
+      operationId: listRecords
+      summary: 馬券記録一覧の取得
+      description: |
+        ログイン中のユーザーの馬券記録を、日付の新しい順（同一日付は登録日時の新しい順）で返す。
+        並び順は固定であり、並び替え・絞り込みのパラメータは持たない。
+
+        1ページは最大20件で固定とし、取得件数を指定するパラメータは持たない。
+        レスポンスサイズの上限により1ページが20件未満になる場合があり、その場合も `nextCursor` で続きを取得する。
+
+        ページングはカーソルベースで行う。`nextCursor` が返された場合は次のページが存在し、
+        その値を `cursor` に指定して次のページを取得する。ページ番号を指定した任意ページへのジャンプは行わない。
+
+        レース記録の要素は買い目・買い目の集合を含めて返す。一覧の行に表示する券種・組合せ・購入額の要約は、
+        このレスポンスから表示側で組み立てる。
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: |
+            次ページの取得位置を表す不透明な文字列。前回のレスポンスの `nextCursor` の値をそのまま指定する。
+            クライアントが値を解釈・生成することはない
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    post:
+      tags: [records]
+      operationId: createRecord
+      summary: 馬券記録の登録
+      description: |
+        馬券記録を1件登録する。`recordType` にレース記録（`RACE`）と簡易記録（`SIMPLE`）のいずれかを指定し、
+        記録種別に応じたボディを送る。登録と同時に生涯収支サマリーへの反映も行われる。
+
+        レース記録の一括登録で成立する買い目が1点となる場合、クライアントは次のとおり送る。
+        - 画面の「通常」「フォーメーション」の指定で成立が1点のときは、通常の買い目（`bets`）として送る。
+        - ボックス・ながしは、成立が1点でも1点だけを含む集合（`betGroups`）として送る。
+
+        サーバーは1点だけを含む買い目の集合を受け入れ、拒否しない（ボックス・ながし、およびフォーメーションの
+        `BetGroupInput` のいずれも対象）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordInput"
+      responses:
+        "201":
+          description: |
+            登録に成功した。登録された馬券記録の全内容を返す。
+            レスポンスの `recordKey` は以降の取得・更新・削除で対象を指定するために使う
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Record"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /records/recent:
+    get:
+      tags: [records]
+      operationId: listRecentRecords
+      summary: 馬券記録概要リストの取得
+      description: |
+        ログイン中のユーザーの馬券記録の概要を、日付の新しい順（同一日付は登録日時の新しい順）で
+        先頭から `limit` 件返す。ページングは行わず、常に先頭からの件数指定のみで取得する。
+        記録の件数が `limit` 未満の場合はその件数だけ返る。
+
+        ホーム画面の直近記録リストでは `limit=5` を指定して使う。
+        `limit` は 1〜20 の整数に限る。範囲外（0 以下・21 以上）の値や整数でない値を指定した場合は `400`
+        （`VALIDATION_ERROR`）を返し、範囲内に丸めて処理することはしない。
+
+        レスポンスは表示に必要な項目に絞った軽量な形式であり、買い目・買い目の集合は含まない。
+        買い目まで必要な場合は `GET /records` を使う。
+
+        パスは `/records/{recordKey}` より優先される静的パスとして解決する。
+        `recordKey` はサーバーが発行する不透明な識別子で `recent` という値を取らないため、衝突は発生しない。
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: |
+            取得する件数の上限（1〜20 の整数）。省略時は5。
+            範囲外・整数でない場合は `400` を返し、丸めない
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 5
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordSummaryList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /records/{recordKey}:
+    parameters:
+      - $ref: "#/components/parameters/RecordKey"
+    get:
+      tags: [records]
+      operationId: getRecord
+      summary: 馬券記録1件の取得
+      description: |
+        編集画面向けに馬券記録1件の全内容を返す。レース記録は買い目・買い目の集合を含む。
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Record"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    put:
+      tags: [records]
+      operationId: updateRecord
+      summary: 馬券記録の更新
+      description: |
+        馬券記録1件の内容を、送られたボディの内容で置き換える。部分更新は行わないため、
+        変更しない項目も含めた記録全体を送る。買い目・買い目の集合の追加・削除・集合をバラす操作も、
+        更新後の構成をボディに反映する形で表現する。
+
+        既存の集合の指定内容を変更した結果、成立する買い目が1点になる場合の送り方は買い方によって異なる。
+        - フォーメーション: 集合は解体されて、その1点は通常の買い目になる。集合（`betGroups`）から外し、
+          集合をバラした場合と同じ構成（通常の買い目 `bets` の1件）で送る。
+        - ボックス・ながし: 変更後が1点でも、1点だけを含む集合のままとして `betGroups` に残して送る。
+
+        サーバーは1点だけを含む買い目の集合を受け入れ、拒否しない。
+
+        指定内容が変わって集合の買い目が作り直された（通常の買い目に置き換わった場合を含む）とき、
+        作り直された買い目の結果状態と払戻額は未入力に戻る。クライアントは、リクエストボディに
+        作り直された買い目の結果状態・払戻額を未入力相当で載せて送ることでこれを表す。
+        - 結果の確定状態が確定前: 結果状態は `UNCONFIRMED`、払戻額は `null`（もともと全買い目が未確定のため変化なし）。
+        - 結果の確定状態が確定後: 的中・返還の指定が外れた状態、すなわち結果状態は `LOST`、払戻額は 0。
+          入力済みの払戻額は破棄される。
+        作り直されなかった他の買い目・他の集合は、現在の結果状態・払戻額をそのまま送る。
+        サーバーは作り直しかどうかを判別せず、送られた結果状態・払戻額を通常どおり
+        「結果入力のルール」で検証する。
+
+        `recordType` は変更できない。パスで指定した記録の記録種別と異なる値を送った場合は `400` を返す。
+
+        日付を変更した場合は `recordKey` の値が変わる。レスポンスの `recordKey` を以降の操作に使い、
+        リクエストに使った値は破棄する。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordInput"
+      responses:
+        "200":
+          description: 更新に成功した。更新後の馬券記録の全内容を返す
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Record"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    delete:
+      tags: [records]
+      operationId: deleteRecord
+      summary: 馬券記録の削除
+      description: |
+        馬券記録1件を削除する。レース記録の場合は、それに属する買い目・買い目の集合も同時に削除される。
+        削除と同時に生涯収支サマリーへの反映も行われる。削除した記録を復元する手段は提供しない。
+        削除の確認操作はクライアント側で行い、本エンドポイントの呼び出しは承認後の1回のみとする。
+      responses:
+        "204":
+          description: 削除に成功した（ボディなし）
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /me:
+    delete:
+      tags: [account]
+      operationId: deleteAccount
+      summary: アカウント削除
+      description: |
+        ログイン中のユーザーのアカウントを削除する。対象ユーザーの馬券記録と生涯収支集計をすべて削除したうえで、
+        Cognito のユーザーを削除する。この順序はサーバー側で保証する。
+
+        削除の確認操作はクライアント側で行い、本エンドポイントの呼び出しは同意後の1回のみとする。
+        応答後はクライアント側で認証状態を終了する。削除したアカウントとその馬券記録を復元する手段は提供しない。
+        処理が途中で失敗した場合は同じ呼び出しを再実行できる。
+      responses:
+        "204":
+          description: 削除に成功した（ボディなし）
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Cognito User Pool が発行した JWT を `Authorization: Bearer <JWT>` で指定する"
+
+  parameters:
+    RecordKey:
+      name: recordKey
+      in: path
+      required: true
+      description: |
+        馬券記録1件を一意に特定する不透明な識別子。一覧・詳細のレスポンスで返された値をそのまま指定する。
+        クライアントが値を解釈・組み立てることはない
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: リクエストの形式または値が不正
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: 入力値が不正です
+              details:
+                - field: bets[0].amount
+                  message: 購入額の指定が不正です
+    Unauthorized:
+      description: 認証されていない（トークンが無い・無効・期限切れ）
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: UNAUTHORIZED
+              message: 認証が必要です
+              details: []
+    NotFound:
+      description: |
+        対象の馬券記録が存在しない。他ユーザーの馬券記録を指定した場合も、存在しないものとして同じ応答を返す
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: RESOURCE_NOT_FOUND
+              message: 指定されたリソースが見つかりません
+              details: []
+    Conflict:
+      description: 同一ユーザーのデータに対する書き込みが競合した
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: CONFLICT
+              message: 処理が競合しました。時間をおいて再実行してください
+              details: []
+    InternalServerError:
+      description: サーバー側の想定外のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: INTERNAL_SERVER_ERROR
+              message: サーバーでエラーが発生しました
+              details: []
+
+  schemas:
+    ErrorResponse:
+      type: object
+      description: すべてのエラー応答に共通のスキーマ
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, details]
+          properties:
+            code:
+              type: string
+              description: エラー種別を表す固定の識別子
+              enum:
+                - VALIDATION_ERROR
+                - UNAUTHORIZED
+                - RESOURCE_NOT_FOUND
+                - CONFLICT
+                - INTERNAL_SERVER_ERROR
+            message:
+              type: string
+              description: 利用者に提示できる日本語のメッセージ
+            details:
+              type: array
+              description: 項目単位の付加情報。該当がない場合は空配列
+              items:
+                $ref: "#/components/schemas/ErrorDetail"
+
+    ErrorDetail:
+      type: object
+      description: 不正な項目の情報
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: 対象項目のパス（例 `bets[0].amount`）
+        message:
+          type: string
+          description: その項目に関するメッセージ
+
+    Summary:
+      type: object
+      description: 生涯収支サマリー
+      required:
+        - totalPurchaseAmount
+        - totalPayoutAmount
+        - balance
+        - recoveryRate
+        - recordCount
+      properties:
+        totalPurchaseAmount:
+          type: integer
+          description: 購入額合計
+        totalPayoutAmount:
+          type: integer
+          description: 払戻額合計
+        balance:
+          type: integer
+          description: |
+            収支額（払戻額合計 − 購入額合計）。正の値は利益、負の値は損失、0は均衡を表す。
+            利益・損失・均衡の判定はこの値で行う
+        recoveryRate:
+          type: number
+          format: double
+          nullable: true
+          example: 85.3
+          description: |
+            回収率（％）。小数第2位を四捨五入した小数第1位までの値（サーバーで丸めて返す。例 85.3、100.0、0.0）。
+            購入額合計が0の場合は算出できないため `null` を返す。
+            クライアントは `null` を「算出できない状態」として表示する。
+            利益・損失・均衡の判定には `balance` を使い、丸めた `recoveryRate` では判定しない
+            （99.95％以上100％未満や100％超100.05％未満は `100.0` と表されるが、`balance` の正負で判定する）
+        recordCount:
+          type: integer
+          description: 集計対象の馬券記録の件数。0 のとき空状態として表示する
+
+    RecordList:
+      type: object
+      description: 馬券記録一覧のレスポンス
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          description: 馬券記録の配列。日付の新しい順（同一日付は登録日時の新しい順）
+          items:
+            $ref: "#/components/schemas/Record"
+        nextCursor:
+          type: string
+          nullable: true
+          description: 次ページの取得位置を表す不透明な文字列。次ページが存在しない場合は `null`
+
+    RecordSummaryList:
+      type: object
+      description: |
+        馬券記録概要リストのレスポンス。ページングを行わないためカーソルの項目を持たない
+      required: [items]
+      properties:
+        items:
+          type: array
+          description: |
+            馬券記録の要約の配列。日付の新しい順（同一日付は登録日時の新しい順）で
+            リクエストの `limit` 件以下。記録が存在しない場合は空配列
+          items:
+            $ref: "#/components/schemas/RecordSummary"
+
+    RecordSummary:
+      type: object
+      description: |
+        馬券記録概要リストの1行を表す馬券記録の要約。記録種別を問わず同一の構造で返し、
+        買い目・買い目の集合は含まない。
+        簡易記録では `raceNumber`・`confirmationStatus` の項目自体が存在しない
+      required:
+        - recordKey
+        - recordId
+        - recordType
+        - date
+        - venue
+        - createdAt
+        - purchaseAmount
+        - balanceTargetPurchaseAmount
+        - balanceTargetPayoutAmount
+      properties:
+        recordKey:
+          type: string
+          description: |
+            馬券記録1件を一意に特定する不透明な識別子。取得・更新・削除でパスパラメータに指定する
+        recordId:
+          type: string
+          format: uuid
+          description: 馬券記録の識別子。表示・照合に使う。この値単体では記録1件を特定できない
+        recordType:
+          $ref: "#/components/schemas/RecordType"
+        date:
+          type: string
+          format: date
+          description: 日付（`YYYY-MM-DD`）
+        venue:
+          $ref: "#/components/schemas/Venue"
+        createdAt:
+          type: string
+          format: date-time
+          description: 登録日時（ISO 8601、ミリ秒精度、UTC）
+        purchaseAmount:
+          type: integer
+          description: 購入額。レース記録は買い目の購入額の合計、簡易記録はユーザーが入力した値
+        balanceTargetPurchaseAmount:
+          type: integer
+          description: 収支額・回収率の算出対象となる購入額。意味は `RecordCommon` の同名項目と同じ
+        balanceTargetPayoutAmount:
+          type: integer
+          description: 収支額・回収率の算出対象となる払戻額。意味は `RecordCommon` の同名項目と同じ
+        raceNumber:
+          type: integer
+          description: |
+            レース番号。レース記録では必ず値を持ち、簡易記録では項目自体が存在しない。
+            `recordType` が `RACE` かどうかで存在の有無が定まる
+        confirmationStatus:
+          allOf:
+            - $ref: "#/components/schemas/ConfirmationStatus"
+          description: |
+            レース記録の結果の確定状態。レース記録では必ず値を持ち、簡易記録では項目自体が存在しない。
+            `recordType` が `RACE` かどうかで存在の有無が定まる
+
+    RecordType:
+      type: string
+      description: 記録種別。`RACE` はレース記録、`SIMPLE` は簡易記録。登録後に変更できない
+      enum: [RACE, SIMPLE]
+
+    ConfirmationStatus:
+      type: string
+      description: レース記録の結果の確定状態。`PENDING` は確定前、`CONFIRMED` は確定後
+      enum: [PENDING, CONFIRMED]
+
+    ResultStatus:
+      type: string
+      description: |
+        買い目の結果状態。`UNCONFIRMED` は結果未確定、`WON` は的中、`LOST` は不的中、`REFUNDED` は返還。
+        取りうる値は属するレース記録の結果の確定状態によって定まる
+      enum: [UNCONFIRMED, WON, LOST, REFUNDED]
+
+    TicketType:
+      type: string
+      description: |
+        券種。`WIN` 単勝、`PLACE` 複勝、`BRACKET_QUINELLA` 枠連、`QUINELLA` 馬連、`WIDE` ワイド、
+        `EXACTA` 馬単、`TRIO` 三連複、`TRIFECTA` 三連単
+      enum:
+        - WIN
+        - PLACE
+        - BRACKET_QUINELLA
+        - QUINELLA
+        - WIDE
+        - EXACTA
+        - TRIO
+        - TRIFECTA
+
+    BetMethod:
+      type: string
+      description: |
+        買い目の集合の買い方。`BOX` ボックス、`NAGASHI` ながし、`FORMATION` フォーメーション。
+        登録後に変更できない。買い方「通常」は集合を作らず、通常の買い目として扱う
+      enum: [BOX, NAGASHI, FORMATION]
+
+    Venue:
+      type: string
+      description: 競馬場。取りうる値は business-rules.md の競馬場のマスタデータに従う
+      example: 東京
+
+    Combination:
+      type: array
+      description: |
+        買い目の組合せ（対象の番号のリスト）。要素数は券種の選択数に対応する。
+        着順を区別する券種（馬単・三連単）は配列の順序が着順を表す。
+        取りうる値は business-rules.md の券種の属性およびマスタデータに従う
+      items:
+        type: integer
+
+    Record:
+      description: 馬券記録。記録種別によってスキーマが分かれる
+      oneOf:
+        - $ref: "#/components/schemas/RaceRecord"
+        - $ref: "#/components/schemas/SimpleRecord"
+      discriminator:
+        propertyName: recordType
+        mapping:
+          RACE: "#/components/schemas/RaceRecord"
+          SIMPLE: "#/components/schemas/SimpleRecord"
+
+    RecordCommon:
+      type: object
+      description: 記録種別に共通する項目
+      required:
+        - recordKey
+        - recordId
+        - recordType
+        - date
+        - venue
+        - createdAt
+        - purchaseAmount
+        - balanceTargetPurchaseAmount
+        - balanceTargetPayoutAmount
+      properties:
+        recordKey:
+          type: string
+          description: |
+            馬券記録1件を一意に特定する不透明な識別子。取得・更新・削除でパスパラメータに指定する。
+            日付を変更する更新を行うと値が変わるため、更新のレスポンスで返された値に差し替える
+        recordId:
+          type: string
+          format: uuid
+          description: 馬券記録の識別子。表示・照合に使う。この値単体では記録1件を特定できない
+        recordType:
+          $ref: "#/components/schemas/RecordType"
+        date:
+          type: string
+          format: date
+          description: 日付（`YYYY-MM-DD`）
+        venue:
+          $ref: "#/components/schemas/Venue"
+        createdAt:
+          type: string
+          format: date-time
+          description: 登録日時（ISO 8601、ミリ秒精度、UTC）
+        purchaseAmount:
+          type: integer
+          description: |
+            購入額。レース記録は属するすべての買い目の購入額の合計（サーバー側で算出）、
+            簡易記録はユーザーが入力した値
+        balanceTargetPurchaseAmount:
+          type: integer
+          description: |
+            収支額・回収率の算出対象となる購入額（サーバー側で算出）。
+            算出対象から外れる買い目を除いた額であり、`purchaseAmount` と一致しない場合がある。
+            この記録1件の収支額は `balanceTargetPayoutAmount − balanceTargetPurchaseAmount` で求める
+        balanceTargetPayoutAmount:
+          type: integer
+          description: |
+            収支額・回収率の算出対象となる払戻額（サーバー側で算出）。
+            生涯収支サマリーの払戻額合計にこの記録が寄与する額と同じ値
+
+    RaceRecord:
+      description: レース記録
+      allOf:
+        - $ref: "#/components/schemas/RecordCommon"
+        - type: object
+          required:
+            - raceNumber
+            - confirmationStatus
+            - bets
+            - betGroups
+          properties:
+            raceNumber:
+              type: integer
+              description: レース番号
+            confirmationStatus:
+              $ref: "#/components/schemas/ConfirmationStatus"
+            bets:
+              type: array
+              description: 通常の買い目（買い目の集合に属さない買い目）の配列
+              items:
+                $ref: "#/components/schemas/Bet"
+            betGroups:
+              type: array
+              description: 買い目の集合の配列。集合を持たないレース記録では空配列
+              items:
+                $ref: "#/components/schemas/BetGroup"
+
+    SimpleRecord:
+      description: 簡易記録。買い目・買い目の集合・レース番号・結果の確定状態を持たない
+      allOf:
+        - $ref: "#/components/schemas/RecordCommon"
+        - type: object
+          required: [payoutAmount]
+          properties:
+            payoutAmount:
+              type: integer
+              description: 払戻額（ユーザー入力）
+
+    Bet:
+      type: object
+      description: 買い目1点
+      required:
+        - betId
+        - ticketType
+        - combination
+        - amount
+        - resultStatus
+        - payoutAmount
+      properties:
+        betId:
+          type: string
+          format: uuid
+          description: 買い目の識別子
+        ticketType:
+          $ref: "#/components/schemas/TicketType"
+        combination:
+          $ref: "#/components/schemas/Combination"
+        amount:
+          type: integer
+          description: |
+            購入額。買い目の集合に含まれる買い目では、集合の `unitAmount` と一致する
+        resultStatus:
+          $ref: "#/components/schemas/ResultStatus"
+        payoutAmount:
+          type: integer
+          nullable: true
+          description: |
+            払戻額。結果状態が `WON` のときのみ値を持ち、それ以外は `null`（`LOST` は 0）
+
+    BetGroup:
+      type: object
+      description: 買い方による一括登録で作られた買い目の集合
+      required:
+        - betGroupId
+        - ticketType
+        - method
+        - methodSpec
+        - unitAmount
+        - betCount
+        - amount
+        - bets
+      properties:
+        betGroupId:
+          type: string
+          format: uuid
+          description: 買い目の集合の識別子
+        ticketType:
+          $ref: "#/components/schemas/TicketType"
+        method:
+          $ref: "#/components/schemas/BetMethod"
+        methodSpec:
+          $ref: "#/components/schemas/MethodSpec"
+        unitAmount:
+          type: integer
+          description: 1点あたりの購入額。集合に含まれるすべての買い目の購入額がこの値になる
+        betCount:
+          type: integer
+          description: 点数（サーバー側で算出）。集合に含まれる買い目の件数
+        amount:
+          type: integer
+          description: 購入額（サーバー側で算出）。`unitAmount × betCount`
+        bets:
+          type: array
+          description: |
+            集合に含まれる買い目の配列。買い方の指定内容から成立した組合せに対応する。
+            フォーメーションの指定内容の変更で1点になった場合は集合が解体されるため、その変更の結果が1点の集合として返ることはない。
+            ボックス・ながしは、登録時・変更後のいずれも1点だけを含む集合が返りうる
+          items:
+            $ref: "#/components/schemas/Bet"
+
+    MethodSpec:
+      description: |
+        買い方の指定内容。構造は `method` に対応する（`BOX` は `BoxSpec`、`NAGASHI` は `NagashiSpec`、
+        `FORMATION` は `FormationSpec`）
+      oneOf:
+        - $ref: "#/components/schemas/BoxSpec"
+        - $ref: "#/components/schemas/NagashiSpec"
+        - $ref: "#/components/schemas/FormationSpec"
+
+    BoxSpec:
+      type: object
+      description: ボックスの指定内容
+      required: [selections]
+      properties:
+        selections:
+          type: array
+          description: 選択した対象（馬番または枠番）のリスト
+          items:
+            type: integer
+
+    NagashiSpec:
+      type: object
+      description: ながしの指定内容
+      required: [axis, partners, multi]
+      properties:
+        axis:
+          type: array
+          description: 軸として選んだ対象のリスト（1つまたは2つ）
+          items:
+            type: integer
+        partners:
+          type: array
+          description: 相手として選んだ対象のリスト
+          items:
+            type: integer
+        axisPosition:
+          type: string
+          nullable: true
+          description: |
+            軸の着順固定の指定（馬単・三連単の着順指定ながし）。`FIRST` 1着、`SECOND` 2着、`THIRD` 3着。
+            着順を固定しない場合とマルチの場合は `null`
+          enum: [FIRST, SECOND, THIRD, null]
+        multi:
+          type: boolean
+          description: マルチ（軸が取りうるすべての着順を網羅する指定）かどうか
+
+    FormationSpec:
+      type: object
+      description: フォーメーションの指定内容
+      required: [positions]
+      properties:
+        positions:
+          type: array
+          description: |
+            着順（構成位置）ごとの選択集合のリスト。配列の順序が着順（構成位置）に対応する
+          items:
+            type: array
+            items:
+              type: integer
+
+    RecordInput:
+      description: 馬券記録の登録・更新のリクエストボディ。記録種別によってスキーマが分かれる
+      oneOf:
+        - $ref: "#/components/schemas/RaceRecordInput"
+        - $ref: "#/components/schemas/SimpleRecordInput"
+      discriminator:
+        propertyName: recordType
+        mapping:
+          RACE: "#/components/schemas/RaceRecordInput"
+          SIMPLE: "#/components/schemas/SimpleRecordInput"
+
+    RaceRecordInput:
+      type: object
+      description: |
+        レース記録の登録・更新のリクエストボディ。更新では送られた内容で記録全体を置き換えるため、
+        変更しない項目も含めて送る。`purchaseAmount`・点数はサーバー側で算出するため送らない
+      required:
+        - recordType
+        - date
+        - venue
+        - raceNumber
+        - confirmationStatus
+        - bets
+        - betGroups
+      properties:
+        recordType:
+          type: string
+          enum: [RACE]
+          description: 記録種別。レース記録は `RACE` 固定
+        date:
+          type: string
+          format: date
+          description: 日付（`YYYY-MM-DD`）
+        venue:
+          $ref: "#/components/schemas/Venue"
+        raceNumber:
+          type: integer
+          description: レース番号
+        confirmationStatus:
+          $ref: "#/components/schemas/ConfirmationStatus"
+        bets:
+          type: array
+          description: 通常の買い目の配列
+          items:
+            $ref: "#/components/schemas/BetInput"
+        betGroups:
+          type: array
+          description: |
+            買い目の集合の配列。集合を持たない場合は空配列。
+            集合をバラす操作は、当該集合を配列から外し、含まれていた買い目を `bets` に移して表現する。
+            新規の一括登録で、画面の「通常」「フォーメーション」の指定で成立が1点のときは、集合ではなく
+            通常の買い目として `bets` に送る。ボックス・ながしは、成立が1点でも1点だけを含む集合として送る。
+            更新で既存のフォーメーションの集合の指定内容を変更した結果、成立する買い目が1点になる場合も同様に、
+            集合として送らず、その1点を通常の買い目として `bets` に送る（バラした場合と同じ構成）。
+            ボックス・ながしは、変更後が1点でもこの配列に残して送る。
+            指定内容の変更で作り直された買い目の結果状態・払戻額は、未入力相当で送る（`PUT /records/{recordKey}` を参照）
+          items:
+            $ref: "#/components/schemas/BetGroupInput"
+
+    SimpleRecordInput:
+      type: object
+      description: 簡易記録の登録・更新のリクエストボディ
+      required:
+        - recordType
+        - date
+        - venue
+        - purchaseAmount
+        - payoutAmount
+      properties:
+        recordType:
+          type: string
+          enum: [SIMPLE]
+          description: 記録種別。簡易記録は `SIMPLE` 固定
+        date:
+          type: string
+          format: date
+          description: |
+            日付（`YYYY-MM-DD`）。簡易記録は未来日を指定できず、上限となる「当日」は JST（UTC+9）の当日で判定する。
+            値は暦日そのものであり、タイムゾーン変換は行わない。
+            上限を超える場合は `400` を返す（登録日時 `createdAt` は UTC のまま）
+        venue:
+          $ref: "#/components/schemas/Venue"
+        purchaseAmount:
+          type: integer
+          description: 購入額（ユーザー入力）
+        payoutAmount:
+          type: integer
+          description: 払戻額（ユーザー入力）
+
+    BetInput:
+      type: object
+      description: |
+        買い目1点の登録・更新のリクエスト。結果状態は、クライアント側で行う「的中・返還の指定」から
+        確定した値を送る（指定されなかった買い目は `LOST`、結果の確定状態が `PENDING` のときは `UNCONFIRMED`）
+      required:
+        - ticketType
+        - combination
+        - amount
+        - resultStatus
+      properties:
+        betId:
+          type: string
+          format: uuid
+          description: |
+            買い目の識別子。更新で既存の買い目を引き継ぐ場合に指定する。
+            新規に追加する買い目では省略し、サーバー側で採番する
+        ticketType:
+          $ref: "#/components/schemas/TicketType"
+        combination:
+          $ref: "#/components/schemas/Combination"
+        amount:
+          type: integer
+          description: 購入額
+        resultStatus:
+          $ref: "#/components/schemas/ResultStatus"
+        payoutAmount:
+          type: integer
+          nullable: true
+          description: 払戻額。結果状態が `WON` のとき必須。それ以外は `null`（`LOST` は 0）
+
+    BetGroupInput:
+      type: object
+      description: |
+        買い目の集合の登録・更新のリクエスト。券種・買い方は登録後に変更できないため、
+        既存の集合を送る場合は登録時と同じ値を送る。点数・購入額はサーバー側で算出するため送らない。
+
+        既存のフォーメーションの集合の指定内容を変更した結果、成立する買い目が1点になる場合は、集合は解体されて
+        その1点は通常の買い目になるため、本スキーマ（集合）としては送らず、`RaceRecordInput.bets` に通常の買い目として送る。
+        新規の一括登録でも、画面の「通常」「フォーメーション」の指定で成立が1点のときは同様に `bets` に送る。
+        ボックス・ながしは、成立が1点（登録時・変更後のいずれも）でも本スキーマ（1点だけを含む集合）として送る。
+
+        サーバーは、1点だけを含む集合を受け入れ、拒否しない。ボックス・ながし、およびフォーメーションの
+        本スキーマ（API に直接送られたもの）のいずれも対象とする。
+
+        指定内容の変更で作り直された買い目の `resultStatus`・`payoutAmount` は未入力相当で送る
+        （詳細は `PUT /records/{recordKey}` を参照）。サーバーは作り直しかどうかを判別せず、通常どおり検証する
+      required:
+        - ticketType
+        - method
+        - methodSpec
+        - unitAmount
+        - bets
+      properties:
+        betGroupId:
+          type: string
+          format: uuid
+          description: |
+            買い目の集合の識別子。更新で既存の集合を引き継ぐ場合に指定する。
+            新規に追加する集合では省略し、サーバー側で採番する
+        ticketType:
+          $ref: "#/components/schemas/TicketType"
+        method:
+          $ref: "#/components/schemas/BetMethod"
+        methodSpec:
+          $ref: "#/components/schemas/MethodSpec"
+        unitAmount:
+          type: integer
+          description: 1点あたりの購入額。含まれるすべての買い目の購入額がこの値になる
+        bets:
+          type: array
+          description: |
+            集合に含まれる買い目の配列。組合せは `methodSpec` から成立する組合せと一致しなければならず、
+            一致しない場合は `400` を返す。各要素の `amount` は `unitAmount` と一致させる。
+            買い目ごとに指定できるのは結果状態と払戻額のみで、組合せ・購入額は集合の指定内容から定まる
+          items:
+            $ref: "#/components/schemas/BetInput"
